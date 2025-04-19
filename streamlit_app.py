@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import re
 
 # Funktion, um die METAR-Daten abzurufen
 def get_metar(icao="LOWS"):
@@ -18,64 +19,82 @@ def get_metar(icao="LOWS"):
 
 # Funktion zur Berechnung von Druckänderungen, Temperatur, Feuchtigkeit und Föhn
 def analyze_weather_conditions(metar_data):
-    # Beispiel für METAR-Daten: "LOWS 181120Z 30012G18KT 15SM -RA OVC030 18/12 A3023 RMK AO2 SLP268"
-    # Wir müssen nun die relevanten Daten wie Druck, Temperatur, Wind und Feuchtigkeit extrahieren.
-
     try:
-        # Extrahieren des Luftdrucks
-        qnh = float(metar_data.split("A")[1].split()[0])  # A3023 -> 3023 -> 1023.0 hPa
+        # Extrahieren des Luftdrucks (Axxx -> xxx hPa, z. B. A3023 -> 1023.0 hPa)
+        pressure_match = re.search(r"A(\d{4})", metar_data)
+        if pressure_match:
+            qnh = float(pressure_match.group(1)) / 100  # Beispiel: 3023 -> 1023.0 hPa
+        else:
+            qnh = None  # Keine Druckdaten gefunden
 
-        # Extrahieren der Temperatur
-        temp = int(metar_data.split(" ")[-5][:-1])  # 18/12 -> Temperatur ist 18°C
+        # Extrahieren der Temperatur (z. B. "18/12" -> 18°C)
+        temp_match = re.search(r"(\d{2})/(\d{2})", metar_data)
+        if temp_match:
+            temp = int(temp_match.group(1))  # Beispiel: 18
+        else:
+            temp = None  # Keine Temperatur gefunden
 
-        # Extrahieren der Windgeschwindigkeit und -richtung
-        wind_data = metar_data.split(" ")[2]  # 30012G18KT -> Windrichtung 300°, 12 kt, Böen 18 kt
-        wind_speed = int(wind_data[3:5])  # 12 kt
-        wind_direction = int(wind_data[:3])  # 300°
+        # Extrahieren der Windgeschwindigkeit und -richtung (z. B. "30012G18KT")
+        wind_match = re.search(r"(\d{3})(\d{2})G(\d{2})KT", metar_data)
+        if wind_match:
+            wind_direction = int(wind_match.group(1))  # Beispiel: 300°
+            wind_speed = int(wind_match.group(2))  # Beispiel: 12 kt
+            gust_speed = int(wind_match.group(3))  # Beispiel: 18 kt (Böen)
+        else:
+            wind_direction = None
+            wind_speed = None
+            gust_speed = None
 
-        # Extrahieren der Feuchtigkeit (hier nicht direkt im METAR, wird üblicherweise aus anderen Quellen abgerufen)
-        humidity = 80  # Dummy-Wert, Feuchtigkeit müsste aus einem anderen Datensatz kommen
+        # Beispielhafte Feuchtigkeit (Dummy-Wert)
+        humidity = 80  # Dummy-Wert für Feuchtigkeit
 
-        # Berechnung des Druckwechsels
-        pressure_change = abs(qnh - 1013)  # Beispiel für Veränderung
+        # Berechnung des Druckwechsels (Differenz zum Standard-QNH 1013 hPa)
+        if qnh is not None:
+            pressure_change = abs(qnh - 1013)
+        else:
+            pressure_change = None
 
-        # Bestimmen des Föhns (Windrichtung und Geschwindigkeit als Kriterien)
-        is_föhn = wind_direction >= 150 and wind_direction <= 240 and wind_speed > 15  # Föhn kommt aus Südrichtung
+        # Föhn-Erkennung (Windrichtung aus Südrichtung und ausreichende Windgeschwindigkeit)
+        is_föhn = False
+        if wind_direction and wind_speed:
+            if 150 <= wind_direction <= 240 and wind_speed > 15:  # Föhn kommt aus Südrichtung
+                is_föhn = True
 
+        # Generiere die Warnung basierend auf den gesammelten Daten
         weather_warning = ""
-        
-        # Schnelle Druckänderungen (mehr als 3 hPa in kurzer Zeit)
-        if pressure_change > 3:
+
+        # Schnelle Druckänderungen
+        if pressure_change and pressure_change > 3:
             weather_warning += "Warnung: Schnelle Druckänderung (mehr als 3 hPa in kurzer Zeit). "
-        
+
         # Föhn oder starker Wind
         if is_föhn:
             weather_warning += "Warnung: Föhn (starker warmer Wind), kann Kopfschmerzen und Schlafstörungen verursachen. "
-        
+
         # Hoher Luftdruck (>1025 hPa)
-        if qnh > 1025:
+        if qnh and qnh > 1025:
             weather_warning += "Warnung: Hoher Luftdruck, kann Kreislaufprobleme verursachen. "
-        
+
         # Niedriger Luftdruck (<1010 hPa)
-        if qnh < 1010:
+        if qnh and qnh < 1010:
             weather_warning += "Warnung: Niedriger Luftdruck, möglicherweise Müdigkeit und Kreislaufbeschwerden. "
-        
+
         # Temperaturstürze oder plötzliche Temperaturänderungen
-        if abs(temp - 15) > 5:
+        if temp and abs(temp - 15) > 5:
             weather_warning += "Warnung: Schnelle Temperaturänderung, kann Kreislaufprobleme verursachen. "
-        
+
         # Hohe Luftfeuchtigkeit (>85%)
         if humidity > 85:
             weather_warning += "Warnung: Hohe Luftfeuchtigkeit, kann das Wohlbefinden beeinträchtigen. "
-        
-        # Gewittergefahr (starker Temperaturabfall in kurzer Zeit)
+
+        # Gewittergefahr (sieht nach Gewitter aus)
         if "TS" in metar_data:
             weather_warning += "Warnung: Gewittergefahr. Achten Sie auf plötzliche Druckänderungen und mögliche Kopfschmerzen oder Schwindel. "
-        
-        # Keine Warnung
+
+        # Wenn keine Warnungen
         if not weather_warning:
             weather_warning = "Aktuell keine Warnung für wetterfühlige Personen."
-        
+
         return weather_warning
 
     except Exception as e:
